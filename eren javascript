@@ -1,0 +1,75 @@
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const qrcode = require('qrcode-terminal');
+const pino = require('pino');
+
+async function connectToWhatsApp() {
+    // Session variables ko save karne ke liye folder automatic banega
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true, // Server terminal me QR code show karne ke liye
+        logger: pino({ level: 'silent' })
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            // Agar aap terminal/logs check karenge to wahan QR code dikhega scan ke liye
+            qrcode.generate(qr, { small: true });
+            console.log("➡️ Is QR Code ko apne WhatsApp se scan karein!");
+        }
+
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('Connection close ho gaya. Reconnecting: ', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            }
+        } else if (connection === 'open') {
+            console.log('🎉 WhatsApp Bot Successfully Connect Ho Gaya Hai!');
+        }
+    });
+
+    // Messages Handle Karne Ka System
+    sock.ev.on('messages.upsert', async m => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return; 
+
+        const remoteJid = msg.key.remoteJid;
+        const messageType = Object.keys(msg.message)[0];
+        let text = "";
+        
+        if (messageType === 'conversation') {
+            text = msg.message.conversation;
+        } else if (messageType === 'extendedTextMessage') {
+            text = msg.message.extendedTextMessage.text;
+        }
+
+        const command = text.toLowerCase().trim();
+
+        // --- YAHA AAP APNI COMMANDS BADHA SAKTE HAIN ---
+        if (command === 'hi' || command === 'hello') {
+            await sock.sendMessage(remoteJid, { text: 'Hello! Main aapka customized WhatsApp bot hoon. `!menu` type karein.' });
+        }
+
+        if (command === '!menu') {
+            const menuText = `🤖 *WELCOME TO MY BOT*\n\n• *!ping* - Check Bot Status\n• *!owner* - Owner Info`;
+            await sock.sendMessage(remoteJid, { text: menuText });
+        }
+
+        if (command === '!ping') {
+            await sock.sendMessage(remoteJid, { text: 'Pong! 🏓 Bot active hai.' });
+        }
+
+        if (command === '!owner') {
+            await sock.sendMessage(remoteJid, { text: '👑 Is bot ke owner aap khud hain!' });
+        }
+    });
+}
+
+connectToWhatsApp();
